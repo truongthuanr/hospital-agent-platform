@@ -1,4 +1,4 @@
-# Hostpital Agent Platform — System Requirements Specification
+# Hospital Agent Platform — System Requirements Specification
 
 **Document:** `requirement.md`  
 **Specification version:** 1.0 (complete target-system overview)  
@@ -13,6 +13,8 @@
 
 Build a reusable, reliable, governed AI agent execution platform. Hospital Front Desk is the first reference application, not a dependency of platform core. The platform must support deterministic workflows, optional LLM-driven decisions, controlled tool invocation, durable execution, human interaction, evaluation, and operational visibility.
 
+The Hospital Front Desk reference application provides general guidance only; it does not provide medical advice or make clinical decisions.
+
 ### 1.1 Goals
 
 - Register and version agents with declared workflow, prompts, tools, model settings and policies.
@@ -22,27 +24,22 @@ Build a reusable, reliable, governed AI agent execution platform. Hospital Front
 - Demonstrate concurrency correctness, idempotent effects, overload protection, observability and reproducible evaluation.
 - Make it possible to add a second domain agent without changing runtime core.
 
-### 1.2 Non-goals for initial MVP
-
-- Production hospital deployment or clinical decision support; diagnosis, prescriptions and autonomous emergency triage are excluded.
-- Exactly-once execution across distributed services; guarantee at-least-once delivery plus bounded idempotent effects where supported.
-- Visual no-code workflow builder, model training, full enterprise IAM, multi-region active-active, autonomous agent marketplace.
-- Real patient records, real hospital integrations, or real-world appointment transactions.
-
-### 1.3 Personas
+### 1.2 Personas
 
 | Role | Capabilities |
 |---|---|
-| Patient (simulated) | Ask questions, submit booking request, confirm; request execution cancellation from v1.1 |
-| Hospital staff (simulated) | Handle escalation and approvals |
+| Patient (simulated) | Ask about hospital services, follow registration and location guidance, request and confirm mock bookings; use the mock service queue and request cancellation from v1.1 |
+| Reception staff (simulated) | Handle administrative handoffs and approvals; manage cases and queue issues from v1.1 |
+| Medical staff (simulated) | Review medically sensitive handoffs; retain responsibility for clinical decisions |
+| Hospital administrator (v1.1) | Manage tenant members and hospital-specific configuration |
 | Agent developer | Register/version agents, workflows, tools, policies |
 | Platform operator | Inspect traces, queue, failures, replay/recover, audit |
 | Evaluator | Run datasets and inspect quality/safety/reliability results |
 
 ## 2. Releases and priorities
 
-- **MVP v1.0 / P0:** Single-instance end-to-end platform, PostgreSQL-backed durable work admission/outbox, version-pinned execution, persisted delayed retries, idempotent mock effects, patient confirmation, minimal staff handoff/approval, basic observability and release-gating tests. Restart recovery is required; live multi-replica recovery is v1.1 scope.
-- **Reliability v1.1 / P1:** Worker leases and fencing, concurrent processing, cancellation, multi-tenant isolation and quotas, backpressure, rate limiting, operator recovery, circuit breakers, richer staff case handling and SLO measurement.
+- **MVP v1.0 / P0:** Single-instance end-to-end platform and one synthetic hospital. Hospital information, procedure guidance, static navigation, mock appointment booking and minimal staff handoff run on PostgreSQL-backed durable work admission/outbox, version-pinned execution and idempotent mock effects. Restart recovery is required; hospital service queue, multiple hospitals and live multi-replica recovery are v1.1 scope.
+- **Reliability v1.1 / P1:** Mock hospital service queue and tracking, appointment changes, advanced navigation, worker leases and fencing, concurrent processing, cancellation, multi-tenant isolation and quotas, backpressure, rate limiting, operator recovery, circuit breakers, richer staff case handling and SLO measurement.
 - **Platform v2.0 / P2:** Multi-agent handoffs, advanced scheduling/fairness, tenant lifecycle extensions, model routing/fallback, hybrid retrieval/reranking, governance/evaluation extensions and scale-out.
 - **Priority convention:** P0 essential; P1 important production-hardening; P2 advanced. Release targets are planning goals, not promises of production readiness.
 
@@ -71,10 +68,10 @@ Patient Web/CLI, Staff Console, Operator CLI/Dashboard
            |
     OpenTelemetry / logs / metrics / evaluation / audit
 
-Hospital Front Desk Agent = workflow + prompts + domain policy + domain tools
+Hospital Front Desk Agent = workflow + prompts + domain policy + hospital knowledge/configuration + mock appointment and service-queue tools
 ```
 
-**Boundary rule:** Platform core must not contain patient, symptom, doctor or appointment domain models. The hospital app owns these concepts. State store, conversation memory, knowledge store and immutable audit/event history are logically separate.
+**Boundary rule:** Platform core must not contain patient, symptom, doctor, appointment, procedure, location or hospital service-queue domain models. The hospital app owns these concepts. State store, conversation memory, knowledge store and immutable audit/event history are logically separate.
 
 ## 4. Functional requirements — Platform lifecycle
 
@@ -134,6 +131,7 @@ Hospital Front Desk Agent = workflow + prompts + domain policy + domain tools
 | TOOL-007 | Tool registry versioning and capability metadata | v1.1 P1 | Incompatible schema changes detected |
 | TOOL-008 | Per-tool concurrency, quota and circuit breaker | v1.1 P1 | Dependency overload does not exhaust all workers |
 | TOOL-009 | Sandboxed tool execution for untrusted operations | v2.0 P2 | Resource/time/network permissions enforced |
+| TOOL-010 | Mock hospital service-queue tool contract | v1.1 P1 | Registration and status reads enforce patient ownership, scoped uniqueness, stable operation IDs and uncertain-outcome reconciliation |
 
 ## 7. Distributed systems, reliability and concurrency contracts
 
@@ -240,32 +238,59 @@ v1.0 uses one fixed synthetic tenant in execution and idempotency records. v1.1 
 
 ## 9. Hospital Front Desk reference application
 
+The reference application uses synthetic hospital and patient data. Its answers provide general administrative guidance, not medical advice or clinical decisions. The hospital service queue below is distinct from the platform work queue in sections 3 and 7. v1.0 serves one configured synthetic hospital; v1.1 adds independently managed hospitals through the tenant controls in section 8.1.
+
 | ID | Requirement | Release | Acceptance criteria |
 |---|---|---|---|
-| HOS-001 | Vietnamese text conversation | v1.0 P0 | Multi-turn intent/slot flow works with synthetic fixtures |
-| HOS-002 | Route FAQ / booking / symptoms / support intents | v1.0 P0 | Curated test set records intent confusion matrix |
-| HOS-003 | Hospital FAQ RAG with citations | v1.0 P0 | Answers grounded; unknown questions abstain |
-| HOS-004 | Rule-governed symptom red-flag escalation | v1.0 P0 | Red-flag cases stop autonomous booking and create a persisted staff-visible handoff; no diagnosis is produced |
-| HOS-005 | Read mock specialty/doctor/slot availability | v1.0 P0 | Tool returns deterministic test fixtures |
-| HOS-006 | Pause for patient confirmation | v1.0 P0 | No booking side effect before explicit confirmation |
-| HOS-007 | Create mock appointment idempotently | v1.0 P0 | Duplicate confirm/retry creates max one booking |
-| HOS-008 | Minimal human handoff | v1.0 P0 | Staff can identify and inspect a persisted handoff; if no staff is available, the patient receives the approved fallback message and the case remains pending |
-| HOS-009 | SSE streaming and reconnect semantics | v1.1 P1 | Client reconnect does not duplicate business action |
-| HOS-010 | Whisper STT voice input | v2.0 P2 | Audio transcribed; uncertain transcript asks confirmation |
-| HOS-011 | Additional agent application as portability proof | v2.0 P2 | Second agent added without modifying platform runtime |
-| HOS-012 | Staff case resolution workflow | v1.1 P1 | Staff records resolution and closes or reopens a support ticket with audit history |
+| HOS-001 | Vietnamese text conversation and multi-turn context | v1.0 P0 | Patient can ask follow-up questions, switch supported intents and resume a waiting workflow without losing its persisted state |
+| HOS-002 | Route information, procedure, navigation, booking, symptoms and support intents | v1.0 P0 | Versioned intent dataset records confusion matrix; ambiguous requests trigger clarification |
+| HOS-003 | Hospital FAQ RAG with citations and abstention | v1.0 P0 | Answers cite approved source IDs; missing or irrelevant evidence produces uncertainty or handoff, never a fabricated answer |
+| HOS-004 | Rule-governed warning-indicator escalation | v1.0 P0 | Configured warning indicators stop autonomous booking, create a persisted staff-visible handoff and show approved fallback guidance; no diagnosis is produced |
+| HOS-005 | Read mock specialty, doctor and appointment-slot availability | v1.0 P0 | Availability comes from a deterministic scheduling fixture, not an LLM-generated slot |
+| HOS-006 | Pause for explicit patient booking confirmation | v1.0 P0 | No booking side effect occurs before confirmation; waiting state survives restart |
+| HOS-007 | Create mock appointment idempotently | v1.0 P0 | Duplicate confirmation or retry creates at most one booking per logical request; expired or contested slots are rejected |
+| HOS-008 | Minimal human handoff | v1.0 P0 | Staff can identify and inspect a persisted handoff; if no staff is available, approved fallback guidance is shown and the case remains pending |
+| HOS-009 | SSE streaming and reconnect semantics | v1.1 P1 | Client reconnect does not duplicate a business action |
+| HOS-010 | Speech-to-text voice input | v2.0 P2 | Uncertain transcript is confirmed before a side effect; text path remains available |
+| HOS-011 | Additional agent application as portability proof | v2.0 P2 | Second agent is added without modifying platform runtime |
+| HOS-012 | Staff case resolution workflow | v1.1 P1 | Authorized staff assign, update, close or reopen a support case with audit history |
+| HOS-013 | Answer approved hospital information inquiries | v1.0 P0 | Hours, departments, services, registration requirements, BHYT procedures and published fee information are answered from configured sources; unavailable facts are disclosed |
+| HOS-014 | Guide examination registration and arrival procedures | v1.0 P0 | First-time and pre-booked patient scenarios show the correct ordered steps and required documents from configured procedures |
+| HOS-015 | Locate departments, rooms and service counters | v1.0 P0 | Agent asks for a starting location when needed and gives a verified building, floor and room/counter route; unknown or outdated locations are not invented |
+| HOS-016 | Track progress through multi-step guidance | v1.0 P0 | Patient can continue the current step after a follow-up question or process restart; the persisted step matches the approved procedure version |
+| HOS-017 | Configure hospital information and procedures | v1.0 P0 | One synthetic hospital has versioned, approved fixtures for hours, departments, locations, procedures, knowledge, staff routing and booking rules |
+| HOS-018 | Identify stale or unavailable operational information | v1.0 P0 | Time-sensitive hours, fees, availability and locations expose an effective date or last-updated value where configured; stale or missing information triggers disclosure or handoff |
+| HOS-019 | Register a patient in a mock hospital service queue | v1.1 P1 | After collecting required information and confirmation, an open service issues one number; concurrent allocations are unique within hospital, service, date and configured queue scope |
+| HOS-020 | Read hospital service queue status | v1.1 P1 | Patient sees their authorized number, status and assigned counter from the queue service; currently serving number is read from backend state |
+| HOS-021 | Recover and reconcile queue registration | v1.1 P1 | Duplicate requests or worker recovery create at most one registration per logical request; uncertain outcomes are checked before retry |
+| HOS-022 | Handle unavailable queue services | v1.1 P1 | Closed or failed service does not issue a number and is never reported as successful |
+| HOS-023 | Manage existing mock appointments | v1.1 P1 | Authorized patient can retrieve, reschedule or cancel a booking within configured rules; each change is confirmed, idempotent and audited |
+| HOS-024 | Provide advanced navigation and accessibility routes | v1.1 P1 | Multi-building routes and accessible routes are returned only when configured and current |
+| HOS-025 | Provide queue notifications and estimates | v1.1 P1 | Optional approaching-turn notice and wait estimate use backend data and label estimates as approximate |
+| HOS-026 | Configure separate hospital tenants and staff policies | v1.1 P1 | Two synthetic hospitals independently configure knowledge, locations, queues, schedules and staff routing; tenant isolation tests pass |
+| HOS-027 | Show interactive floor maps | v2.0 P2 | Map location and route agree with approved hospital configuration |
+| HOS-028 | Add multilingual and spoken responses | v2.0 P2 | Responses preserve approved content and safety behavior across supported languages and voice output |
+| HOS-029 | Validate a sandbox hospital scheduling connector | v2.0 P2 | Connector respects authorization, operation reconciliation and data policy using synthetic records; no real patient transaction occurs |
 
-### 9.1 Reference workflow
+### 9.1 Reference workflows
 
-1. Patient asks a question or requests an appointment.
-2. Intent routing and deterministic safety screening.
-3. If red flags or uncertainty: stop autonomous path, persist a staff-visible handoff and show the approved fallback message when staff is unavailable.
-4. If FAQ: retrieve evidence and answer with citations or abstain.
-5. If booking: collect required fields, query mock availability, present options.
-6. Persist `WAITING_INPUT` checkpoint while awaiting patient confirmation.
-7. On confirmation, invoke policy-checked MCP booking tool with stable idempotency key.
-8. Commit result; on ambiguous timeout reconcile remote operation before retry.
-9. Emit trace, audit events and metrics; report terminal status.
+1. **Inquiry:** classify intent, retrieve approved hospital knowledge within the active hospital, cite the source and disclose when facts are missing or stale.
+2. **Procedure guidance:** load the approved procedure version, give the next step, persist progress and allow clarification without losing the workflow.
+3. **Navigation:** identify the requested destination and starting point, read configured location data and provide a verified route or hand off when the route is unknown.
+4. **Appointment:** collect required fields, read mock availability, present options, persist `WAITING_INPUT`, obtain explicit confirmation and invoke the policy-checked booking tool with a stable idempotency key. Reconcile ambiguous outcomes before retry.
+5. **Hospital service queue (v1.1):** identify an open service, collect required fields, obtain confirmation, allocate atomically with a stable operation ID and read status from the queue backend.
+6. **Safety or support:** screen for configured warning indicators before routine actions; stop autonomous side effects when triggered, persist a staff-visible handoff and show approved fallback guidance.
+7. All paths emit trace, redacted audit events and an accurate waiting, completed or failed status.
+
+### 9.2 Hospital business rules
+
+- Hospital information, procedures, locations, hours and fees come from approved versioned sources. The agent must disclose uncertainty and must not invent prices, insurance coverage, availability, rooms or routes.
+- General information inquiries do not require patient identification. Booking, queue registration and access to an existing record require only the identity and fields needed for that action; patient sessions can access only their own records.
+- Availability and queue status come from their mock backend services. A displayed appointment slot is not reserved until booking succeeds; concurrent bookings cannot exceed slot capacity.
+- Every side-effecting appointment or queue operation has a stable operation identity. A timeout is not proof of failure; reconcile an uncertain outcome before retry or reporting success.
+- Symptom signals support administrative handoff only. No diagnosis, treatment, prescription or autonomous emergency disposition is permitted. Warning indicators and patient-facing fallback guidance require qualified review before use; classifier confidence is not a clinical probability.
+- In v1.0, hospital-specific fixtures belong to one fixed synthetic tenant. From v1.1, hospital business records, knowledge retrieval, policies, staff actions and service effects are scoped to the validated active tenant.
+- Hospital service queue numbers are unique within their configured scope; status is read from backend state. Closed services and failed operations never yield a success message.
 
 ## 10. API contracts (initial)
 
@@ -298,7 +323,7 @@ v1.0 uses one fixed synthetic tenant in execution and idempotency records. v1.1 
 
 - Standard error body: `error_code`, `message`, `trace_id`, optional `retry_after` and `details` (safe/redacted).
 - Document `400`, `401`, `403`, `404`, `409`, `422`, `429`, `500`, `503` semantics.
-- All mutation endpoints must specify idempotency, concurrency and authorization rules.
+- All mutation endpoints must specify idempotency, concurrency and authorization rules. Hospital appointment and service-queue actions are invoked through authorized domain tools in the agent workflow; their schemas, operation IDs, ownership checks and reconciliation endpoints must be documented separately. The service queue is not the platform work queue.
 - In v1.0, a synthetic patient session may read and submit input only for its own execution; staff-only approval and handoff access require staff identity. A mismatched session or role is denied before state changes.
 - From v1.1, tenant-scoped endpoints derive the active tenant from the validated session. If the path contains `tenant_id`, it must match the active tenant and the caller's role. Revocation invalidates access on the next request; a cached tenant context must not bypass the membership check.
 
@@ -320,8 +345,11 @@ v1.0 uses one fixed synthetic tenant in execution and idempotency records. v1.1 
 - `knowledge_documents(tenant_id, id, version, source, metadata)` and `knowledge_chunks(tenant_id, id, document_id, embedding, text, metadata)`
 - `audit_records(tenant_id, id, actor, action, resource, outcome, trace_id, timestamp)` (`tenant_id` nullable only for global platform administration)
 - `evaluation_runs(tenant_id, id, dataset_version, agent_version, metrics, created_at)`
+- Hospital application schema: `hospital_profiles`, `hospital_departments`, `hospital_locations`, `hospital_procedures` and their approved versions (v1.0 synthetic fixtures)
+- Hospital application schema: `appointment_slots`, `appointments` and `handoff_cases`, with patient-session ownership, operation IDs and tenant IDs (v1.0 mock services)
+- Hospital application schema: `queue_services`, `queue_registrations` and `queue_status_events`, with scoped unique numbers and operation IDs (v1.1 mock service)
 
-For v1.1, define tenant-scoped unique constraints and composite foreign keys so a child row cannot reference another tenant's parent. Index tenant-leading access paths, including retrieval filters and outbox/queue claims. Define retention and migration strategy during detailed design. Keep medical-domain tables (appointments, slots, tickets) in the hospital application schema with `tenant_id`.
+For v1.1, define tenant-scoped unique constraints and composite foreign keys so a child row cannot reference another tenant's parent. Index tenant-leading access paths, including retrieval filters and outbox/queue claims. Define retention and migration strategy during detailed design. Keep hospital-domain tables (appointments, slots, service queues, procedures, locations and handoff cases) in the hospital application schema with `tenant_id`. v1.0 uses one fixed synthetic tenant; v1.1 enforces isolation across independently managed tenants. Queue number allocation and appointment capacity require database constraints and atomic transactions in their mock services.
 
 ## 12. Non-functional requirements and measurable targets
 
@@ -363,6 +391,8 @@ For v1.1, define tenant-scoped unique constraints and composite foreign keys so 
 | EVAL-005 | Regression and model/prompt version comparison | v2.0 P2 | Compare quality, latency, cost and failure rates |
 | EVAL-006 | Adversarial/prompt injection testing | v2.0 P2 | Tool policy holds under malicious retrieved content |
 | EVAL-007 | Expanded safety evaluation | v1.1 P1 | Red-flag miss rate and unsafe action rate reported with sample size, manual review and documented limitations |
+| EVAL-008 | Hospital information and guidance evaluation | v1.0 P0 | Versioned cases cover hours, BHYT, procedures, stale facts, location lookup, missing evidence and multi-turn continuation |
+| EVAL-009 | Hospital service-queue evaluation | v1.1 P1 | Concurrent allocation, duplicate retry, status ownership, closed service and crash reconciliation cases pass |
 
 Evaluation must distinguish deterministic checks, heuristic/LLM-as-judge scoring and human review. Report sample size and limitations; no blanket hallucination detection guarantees.
 
@@ -398,12 +428,18 @@ Evaluation must distinguish deterministic checks, heuristic/LLM-as-judge scoring
 | FT-026 | Revoke member while tenant session is active; inject wrong-tenant worker job | Next request denied; worker rejects job before tool/effect/commit | v1.1 |
 | FT-027 | Tenant A saturates request, queue and provider quota across two replicas | A is limited; B retains its configured capacity and can progress | v1.1 |
 | FT-028 | Tenant admin B edits A membership/quotas or removes B's last admin | Cross-tenant edits denied; last-admin removal denied; no role escalation | v1.1 |
+| FT-029 | Ask about hours, BHYT, fees and procedures with current, stale and absent sources | Current answers cite approved sources; stale or absent facts are disclosed; no invented detail | v1.0 |
+| FT-030 | Ask for a department route without a starting point or with an unknown room | Starting point is requested; route uses verified location data or reports that it is unavailable | v1.0 |
+| FT-031 | Interrupt multi-step registration guidance and resume after restart | Correct approved procedure version and step are restored | v1.0 |
+| FT-032 | Two patients book the last available mock slot | At most the configured slot capacity is committed; unsuccessful patient receives no false confirmation | v1.0 |
+| FT-033 | Concurrent hospital service-queue requests, duplicate retry and worker crash | Unique scoped queue numbers; at most one registration per logical request; uncertain outcome reconciled | v1.1 |
+| FT-034 | Queue service closed or unavailable; patient requests status of another session | No number or false success; unauthorized status access denied | v1.1 |
 
 ## 15. Definition of Done by release
 
 ### MVP v1.0
 
-- [ ] Hospital workflow completes FAQ and mock booking paths end-to-end.
+- [ ] Hospital workflow completes approved information inquiry, procedure guidance, static navigation, mock booking and minimal handoff paths end-to-end.
 - [ ] Agent config, state machine, checkpoint and resume implemented.
 - [ ] Config versions are immutable and pinned per execution; PostgreSQL work queue/outbox and delayed retries survive restart.
 - [ ] MCP tool invocation is schema-validated and policy-checked.
@@ -411,18 +447,18 @@ Evaluation must distinguish deterministic checks, heuristic/LLM-as-judge scoring
 - [ ] Appointment side effects use persistent idempotency and ambiguous-outcome reconciliation.
 - [ ] Crash/restart, duplicate confirm, concurrent CAS and authorization tests pass.
 - [ ] Minimal staff-visible handoff and patient fallback work; critical red-flag safety suite passes with manual review.
-- [ ] FT-001 through FT-008, FT-010, FT-011, FT-021 and FT-022 pass reproducibly.
+- [ ] FT-001 through FT-008, FT-010, FT-011, FT-021, FT-022 and FT-029 through FT-032 pass reproducibly.
 - [ ] Synthetic data, safe demo policies, structured logs and documented run instructions exist.
 
 ### Reliability v1.1
 
 - [ ] Worker lease, heartbeat, live-worker reclaim and stale-owner protection extend the v1.0 durable queue/outbox.
 - [ ] Rate limits, tenant quotas, concurrency caps, queue bounds, backpressure and load shedding tested.
-- [ ] Two synthetic tenants can be created and managed; membership, active tenant context, agents, executions, RAG, tools, audit and worker paths enforce tenant isolation.
-- [ ] Cancellation, general scheduling, operator recovery and staff case resolution implemented.
+- [ ] Two synthetic hospitals can be created and managed; membership, active tenant context, agents, executions, RAG, hospital configuration, service effects, audit and worker paths enforce tenant isolation.
+- [ ] Mock hospital service-queue registration/tracking, appointment changes, advanced navigation, cancellation, general scheduling, operator recovery and staff case resolution implemented.
 - [ ] Circuit breaker, graceful shutdown and DLQ/reconciliation implemented; v1.0 bounded retry remains enforced.
 - [ ] OpenTelemetry traces, metrics, cost tracking and load benchmark report available.
-- [ ] v1.0 failure tests remain green; FT-009, FT-012 through FT-019 and FT-023 through FT-028 run reproducibly.
+- [ ] v1.0 failure tests remain green; FT-009, FT-012 through FT-019, FT-023 through FT-028 and FT-033 through FT-034 run reproducibly.
 
 ### Platform v2.0
 
@@ -472,22 +508,23 @@ agentos-lite/
 ## 18. Proposed execution plan
 
 1. **Foundation:** repository, architecture ADR, FastAPI, PostgreSQL schema, execution state machine and API.
-2. **First vertical slice:** hospital intent, FAQ RAG, mock appointment MCP, user confirmation and minimal staff handoff.
+2. **First vertical slice:** hospital intent, approved FAQ/procedure/location fixtures, guided answers, mock appointment MCP, patient confirmation and minimal staff handoff.
 3. **MVP correctness:** immutable version pinning, PostgreSQL-backed queue/outbox and delayed retry, transactional state changes, idempotency keys, external reconciliation and crash tests.
 4. **MVP governance:** policy engine, approval, patient/staff access rules, audit and critical safety release gate.
-5. **Reliability v1.1:** leases/fencing, cancellation, tenant management/isolation/quotas, operator/staff workflows, overload controls and circuit breaker.
+5. **Reliability v1.1:** mock hospital service queue, appointment changes, advanced navigation, leases/fencing, cancellation, tenant management/isolation/quotas, operator/staff workflows, overload controls and circuit breaker.
 6. **Observability:** traces, metrics, token/cost, dashboards and reproducible load tests.
 7. **Extensibility:** second agent, multi-agent handoff, advanced retrieval and tenant lifecycle extensions.
 
 ## 19. Demonstration scenarios
 
-1. **Happy path:** Vietnamese FAQ → cited answer; appointment search → patient confirmation → one mock booking.
+1. **Happy path:** Vietnamese inquiry → cited hospital answer; procedure and location guidance → verified steps/route; appointment search → patient confirmation → one mock booking.
 2. **Crash window:** stop the v1.0 service after remote booking success but before checkpoint → restart → reconcile by operation ID → no duplicate.
 3. **Concurrency race:** duplicate confirmation and two workers → version conflict + idempotency; one logical effect.
 4. **Overload:** 50 users, 20 worker slots, bounded queue and rate limit → controlled 429/503, measurable queue depth/latency.
 5. **Governance:** malicious/unauthorized tool request → blocked and audited; suspicious symptoms → human escalation.
 6. **Evaluation:** run versioned golden dataset, show retrieval, safety, latency and cost trade-offs.
-7. **Multi-tenant v1.1:** two synthetic hospitals use the same agent ID and request key; cross-tenant API/RAG/tool attempts are denied, while one tenant's quota saturation does not block the other.
+7. **Hospital operations v1.1:** register and track a mock service-queue number; duplicate and concurrent requests preserve uniqueness and idempotency.
+8. **Multi-tenant v1.1:** two synthetic hospitals use the same agent ID and request key; cross-tenant API/RAG/tool attempts are denied, while one tenant's quota saturation does not block the other.
 
 ---
 
