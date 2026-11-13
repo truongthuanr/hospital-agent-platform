@@ -1,9 +1,9 @@
 # High-Level Design — Hospital Agent Platform
 
-**Version:** 1.1 (proposed; updated for hospital functionality)  
+**Version:** 1.2 (architecture baseline)
 **Requirements source:** [requirement.md](requirement.md), version 1.0  
 **Scope:** target architecture and release path from MVP v1.0 through Reliability v1.1 to Platform v2.0  
-**Status:** proposed for review; section 13 separates proposed ADRs from open choices and low-level design work
+**Status:** architecture baseline; accepted ADRs in section 13, low-level design still required before implementation
 
 ## 1. Goals and principles
 
@@ -60,7 +60,7 @@ flowchart TD
     Hospital --> Domain[(Hospital app schema: config / appointments / service queue)]
 ```
 
-**MVP deployment:** The API, scheduler/dispatcher, and workers may run in one Docker Compose service or process group. They remain separate modules so restart and fault-injection behavior can be tested. PostgreSQL is the source of truth; Redis and a telemetry backend are optional. v1.1 may run multiple API and worker replicas against the same database after leases, fencing, and distributed admission and quotas are added.
+**MVP deployment:** The API, scheduler, and workers may run in one Docker Compose service or process group. They remain separate modules so restart and fault-injection behavior can be tested. Workers claim due jobs directly from PostgreSQL, which is the source of truth; Redis and a telemetry backend are optional. v1.1 may run multiple API and worker replicas against the same database after leases, fencing, and distributed admission and quotas are added.
 
 ### 3.1 Module boundaries
 
@@ -109,7 +109,7 @@ stateDiagram-v2
 - **Step transition:** Load the execution and its pinned configuration, make the step decision, then perform `UPDATE ... WHERE id = ? AND version = ?`. Write the checkpoint, step attempt, event, and next outbox record in the same transaction. On a CAS loss, reload and discard the stale decision; do not repeat a side effect merely because CAS failed.
 - **Waiting for input or approval:** Commit the waiting state and valid input token or decision ID before reporting the prompt or approval request. Deduplicate repeated input or decisions, check authorization and state/version within one transaction, then enqueue the next step.
 - **Delayed retry:** Persist `due_at`, the attempt and budget, and the work intent in PostgreSQL. The scheduler claims only due jobs, respecting `Retry-After` and jitter. A restart does not move a retry earlier than its due time.
-- **Outbox:** The dispatcher reads unpublished records, publishes them at least once, and marks them published. A crash after commit or between publish and mark can produce duplicates. Consumers verify tenant, execution state/version, job ID, and attempt before proceeding. The MVP may claim jobs directly from the database; the outbox still defines the transaction boundary for work intents.
+- **Outbox/work delivery:** In MVP, the durable job row is the transactionally committed outbox work intent. Workers claim due jobs directly from PostgreSQL and verify tenant, execution state/version, job ID, and attempt before proceeding. A crash after claim can cause another claim after recovery, so processing remains at least once. If a separate transport is added later, a dispatcher publishes committed outbox records and marks them published; a crash between publish and mark can duplicate delivery. PostgreSQL remains authoritative.
 
 ### 4.2 Side effects and uncertain outcomes
 
@@ -167,7 +167,7 @@ PostgreSQL has the following logical boundaries, potentially within one database
 |---|---|---|
 | Registry | `agents` and versioned configuration snapshots | Unique `(tenant_id, agent_id, version)`; published snapshots are immutable |
 | Execution | `executions`, `execution_events`, `step_attempts`, `checkpoints` | CAS on `executions.version`; event sequence unique within an execution; state and checkpoints exclude full chat history |
-| Work/reliability | `outbox_events`, durable jobs and due times, `idempotency_records`, `tool_invocations`; `worker_leases` from v1.1 | Unique scoped idempotency keys and operation IDs; indexes for due/uncompleted jobs; retention longer than the retry/replay window (seven days suggested for the demo) |
+| Work/reliability | Durable jobs and due times (MVP outbox work intents), `idempotency_records`, `tool_invocations`; optional publication outbox and `worker_leases` from v1.1 | Unique scoped idempotency keys and operation IDs; indexes for due/uncompleted jobs; retention longer than the retry/replay window (seven days suggested for the demo) |
 | Governance | `approvals`, `audit_records`, hospital staff handoffs | Actor, time, decision ID, policy result, outcome, and trace; redacted payloads |
 | AI | `conversation_messages`, `knowledge_documents`, `knowledge_chunks`, `evaluation_runs` | Memory separate from execution state; source/version for citations; tenant-filtered pgvector retrieval from v1.1 |
 | Tenant v1.1 | `tenants`, `tenant_memberships`, `tenant_quota_configs` | Context from session and membership; audited changes; last-admin protection |
@@ -232,12 +232,12 @@ Each test records agent and dataset versions, environment, sample size, and limi
 
 ## 11. Selected architecture decisions
 
-The choices below are HLD proposals, not accepted decision records. An ADR records the context, alternatives, decision, and consequences when the relevant choice is reviewed. Section 13 identifies the proposed ADR boundaries and remaining work.
+The choices below are the architecture baseline. Section 13 links the accepted ADRs that record the context, alternatives, rationale, and consequences. Low-level design and release verification remain separate work.
 
-| Decision | Proposed HLD choice | Reason and consequence |
+| Decision | Baseline choice | Reason and consequence |
 |---|---|---|
 | Runtime | Small custom deterministic state machine, optional LangGraph adapter later | Explicit control of transitions, checkpoints, and policy; more engineering and testing required |
-| Authoritative queue | PostgreSQL durable jobs and transactional outbox; MVP delivery path remains open | Acknowledged work survives restart; dispatch can repeat. ADR-002 must choose direct database claims or a dispatcher transport |
+| Authoritative queue | PostgreSQL durable jobs as outbox work intents; direct database claims in MVP | Acknowledged work survives restart; claim and processing can repeat. A separate dispatcher transport requires a later decision |
 | Side effects | Durable operation IDs plus remote idempotency and lookup | Bounds duplicates; uncertain outcomes require reconciliation |
 | LLM | Provider adapter and a test stub | Workflows are model-independent; the LLM grants no permissions |
 | RAG | PostgreSQL/pgvector with approved, versioned hospital information and procedures | Citations retain provenance/effective dates; v1.1 adds tenant filters and retrieval measurement |
@@ -258,14 +258,14 @@ The choices below are HLD proposals, not accepted decision records. An ADR recor
 | Stale hospital information or incorrect route | Approved sources with versions/effective dates; clarify or hand off when no valid route exists |
 | Slot contention or concurrent number allocation | Atomic transactions and constraints in mock services; inject contention, timeouts, and crashes |
 
-## 13. Proposed ADRs and low-level design work
+## 13. Accepted ADRs and low-level design work
 
-Each ADR below should capture one architectural choice, its context, credible alternatives, rationale, consequences, status, and decision owner/date. These are proposed records; the HLD does not mark them accepted. The MVP delivery path in ADR-002 is still an open choice.
+The [ADRs](adr/README.md) capture each architectural choice, its context, alternatives, rationale, consequences, and decision date. They form the accepted design baseline. ADR-002 selects direct PostgreSQL job claims for MVP; a separate transport would require an amendment or new ADR.
 
 | Record | Architectural choice to review |
 |---|---|
 | ADR-001 — Runtime | Use a small deterministic state machine with durable checkpoints and CAS transitions; permit a LangGraph adapter later |
-| ADR-002 — Work delivery | Keep PostgreSQL authoritative for jobs, due times, and outbox intents; choose direct database claims or a dispatcher transport for MVP delivery |
+| ADR-002 — Work delivery | Keep PostgreSQL authoritative for jobs and due times; claim durable job rows directly in MVP |
 | ADR-003 — Side effects | Use stable operation IDs, remote idempotency and lookup, and explicit reconciliation for uncertain outcomes |
 | ADR-004 — Identity and authorization | Use server-derived tenant context and centralized RBAC + ABAC policy checks across API, workers, and tools; add membership rechecks in v1.1 |
 | ADR-005 — Hospital knowledge | Use approved, versioned sources with provenance, effective dates, citation validation, and abstention for unsupported answers |
