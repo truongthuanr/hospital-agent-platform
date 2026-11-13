@@ -3,7 +3,7 @@
 **Version:** 1.1 (proposed; updated for hospital functionality)  
 **Requirements source:** [requirement.md](requirement.md), version 1.0  
 **Scope:** target architecture and release path from MVP v1.0 through Reliability v1.1 to Platform v2.0  
-**Status:** proposed for review; the decisions in section 13 need ADRs and low-level design before implementation
+**Status:** proposed for review; section 13 separates proposed ADRs from open choices and low-level design work
 
 ## 1. Goals and principles
 
@@ -33,11 +33,11 @@ v1.1 and v2.0 are planned extensions, not implicit MVP features. The application
 ## 3. Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
     Patient[Patient Web / CLI] --> API[FastAPI Gateway]
     Staff[Reception / Medical Staff Console] --> API
     Operator[Operator CLI / Dashboard] --> API
-    API --> Auth[Auth + tenant context + RBAC]
+    API --> Auth[Auth + tenant context + RBAC + ABAC policy]
     API --> Registry[Agent Registry]
     API --> Runtime[Workflow Runtime]
     Runtime --> Queue[PostgreSQL work queue / outbox]
@@ -66,13 +66,13 @@ flowchart LR
 
 | Module | Responsibilities | Does not own |
 |---|---|---|
-| API/Auth | Authentication, patient-session ownership, tenant context, RBAC, HTTP schemas, admission, status and event responses | Workflow execution or durable state in memory |
+| API/Auth | Authentication, server-derived tenant context, role checks, resource/action attribute checks, HTTP schemas, admission, status and event responses | Workflow execution or durable state in memory |
 | Registry | Validate and store immutable agent configuration snapshots; resolve versions within a tenant | Changes to configuration used by a running execution |
 | Runtime | State machine, transition CAS, checkpoints, events, step attempts, retries, and timeouts | Side effects that bypass the tool manager |
 | Queue/Scheduler | Persist work intents, claim due jobs, redispatch after restart | Execution state in place of PostgreSQL |
 | LLM Gateway | Provider adapters, timeouts, output schemas; usage and budgets from v1.1 | Tool authorization |
 | Retrieval/Memory | Approved hospital information and procedure chunks, tenant filters, provenance and citations; conversations separate from execution state | Instructions that override policy |
-| Policy/HITL | Allowlists, sensitive actions, approvals, warning-indicator rules, audit | Treating an LLM decision as authorization |
+| Policy/HITL | Central authorization rules for action/resource context, tool allowlists, sensitive actions, approvals, warning-indicator rules, audit | Treating an LLM decision as authorization |
 | Tool Manager/MCP | Validate arguments and results, classify errors, assign operation IDs, reconcile side effects | Declaring success when a remote outcome is uncertain |
 | Hospital app | Domain workflows, prompts, policies, versioned profiles/procedures/locations, handoffs, mock slots/appointments, and service queues from v1.1 | Hospital domain models in the platform core |
 
@@ -182,12 +182,26 @@ v1.0 writes a fixed `tenant_id` on every tenant-owned record. v1.1 adds tenant-s
 
 The HTTP/JSON API in the requirements is the primary interface. `POST /agents/{agent_id}/executions` requires `Idempotency-Key` and returns `202` after durable commit. `GET /executions/{id}` and `/events` check ownership or role. `POST /input` uses an input event ID and expected version; `/approval` uses a decision ID and staff role. Only authorized staff may list or inspect hospital handoffs; medically sensitive handoffs route to appropriate medical staff. Mutations use the standard error shape `{error_code, message, trace_id, retry_after?, details?}` and consistent `400/401/403/404/409/422/429/500/503` semantics.
 
+### 7.1 Authorization model
+
+Use a **hybrid RBAC + ABAC authorization model**. RBAC answers which actions a role may attempt; policy then evaluates the authenticated actor, server-derived tenant, resource owner and tenant, action, current execution/case state, and the agent's pinned tool/policy version. The decision defaults to deny. Client-supplied tenant or ownership fields never grant access, and LLM output is never an authorization attribute. This requires a small centralized policy decision function and enforcement at the API, worker, and Tool Manager boundaries; a separate general-purpose ABAC service is not required for the MVP.
+
+| Action | Role gate | Required resource/action attributes |
+|---|---|---|
+| Read execution or submit input | Patient session or authorized staff | Same tenant; patient session owns the execution, or staff has scoped access; input accepted only in `WAITING_INPUT` with a valid event ID/version |
+| Decide approval | Authorized staff role | Same tenant, permitted handoff/approval type, `WAITING_APPROVAL`, unconsumed decision ID |
+| Read or change appointment / service-queue record | Patient session or authorized staff | Same tenant and patient ownership or scoped staff assignment; valid record state and action-specific confirmation |
+| Invoke MCP tool | Authorized agent execution | Same tenant, pinned agent allowlist and policy, valid step/state, approved sensitive action when required |
+| Manage tenant configuration or members (v1.1) | Tenant admin, agent developer, or platform operator as appropriate | Active membership and matching tenant; role-specific scope; last-admin and operator-content restrictions |
+
+For v1.0, the attribute checks cover the fixed synthetic tenant, patient-session ownership, approval scope, execution state, and tool allowlists. v1.1 adds membership rechecks, cross-tenant denial, staff assignments, and tenant-specific policy/knowledge/tool scope. Authorization decisions and denials are audited with redacted context. Foreign resource IDs return `404` without disclosing their existence; insufficient permission for a known same-tenant resource returns `403`.
+
 In v1.0, a synthetic patient session is bound to its own execution and cannot approve actions or inspect handoffs. Operators and staff must authenticate. In v1.1, the active tenant comes from an authenticated session and currently valid membership on **every request**; a tenant ID in the path must match that context. Revocation takes effect on the next request. A worker does not trust a tenant ID in a queue payload: it reloads the execution and agent configuration, then verifies tenant ownership before effects or commits. Appointment and service-queue actions use authorized domain tools rather than separate public mutation endpoints in the platform API; tool contracts must specify schemas, ownership, operation IDs, and reconciliation lookup. v1.1 SSE streams persisted events by sequence/cursor; reconnecting only rereads events and does not create an action.
 
 ## 8. Security, safety, and operations
 
 - Secrets come from the environment or a secret store, never the repository or logs. Logs, events, traces, and audit redact sensitive content; audit retains actor, action, resource, policy result, outcome, and correlation IDs.
-- API, LLM, and MCP inputs and outputs are schema-validated. LLM calls have timeouts and a bounded output-repair budget. Only declared step types call an LLM; every tool call passes a server-side policy gate and per-agent allowlist.
+- API, LLM, and MCP inputs and outputs are schema-validated. LLM calls have timeouts and a bounded output-repair budget. Only declared step types call an LLM; every tool call passes the centralized action/resource policy check and per-agent allowlist.
 - Only synthetic data is used; answers are administrative guidance, not medical advice. The MVP safety gate runs a fixed, versioned warning-indicator suite, requires zero missed handoffs within that suite and zero unauthorized effects, and has a reviewer sign off on the results. This is not a claim of clinical sensitivity.
 - Readiness checks database connectivity and minimum processing capability; liveness reflects process health only. Structured logs include applicable `trace_id`, `execution_id`, `step_id`, `attempt_id`, and `operation_id` values without raw patient input.
 - v1.1 adds OpenTelemetry spans across API, runtime, LLM/MCP, and database; metrics for queue depth/age, worker occupancy, retries, errors, p50/p95/p99 latency, provider usage and cost; and a protected `/metrics` endpoint. Per-dependency circuit breakers and graceful shutdown stop intake, then drain or safely release leases.
@@ -208,6 +222,7 @@ In v1.0, a synthetic patient session is bound to its own execution and cannot ap
 | Registry, runtime, checkpoints, versioning | PLT-001–007, 009, 011; REL-001, 004, 007 | Invalid transition, restart while waiting, configuration update during a waiting execution (FT-003/004/010/021) |
 | Idempotency, MCP, recovery | TOOL-001–006; REL-002/003/005/006; HOS-005–007 | 100 requests with one key, same key with different body, crash after remote success, duplicate queue delivery (FT-001/002/005/011) |
 | AI, RAG, safety | AI-001–006; SEC-003/007; HOS-001–004/008; EVAL-001/004 | Citations/abstention, warning-indicator handoff, fallback with staff offline, policy negative suite (FT-006/007/008/022) |
+| Authorization | SEC-001–004/012; TEN-003/005/007/010 | Role and attribute checks at API, worker, and tool boundaries; foreign-ID denial, patient ownership, staff-only approvals, membership revocation (FT-006/023/026) |
 | MVP hospital guidance | HOS-013–018; EVAL-008; HOS-005–007 | Current/stale/missing sources, starting point, procedure resume, slot contention (FT-029–032) |
 | v1.1 service queue and appointments | TOOL-010; HOS-019–026; EVAL-009 | Concurrent number allocation, deduplication/reconciliation, closed services, patient ownership (FT-033/034) |
 | v1.1 tenants and overload | TEN-001–011; REL-008–020; SEC-010; NFR-001–005/009/016 | Two replicas, wrong-tenant job, revocation, quota saturation, 50 users (FT-009/012–019/023–028) |
@@ -217,13 +232,16 @@ Each test records agent and dataset versions, environment, sample size, and limi
 
 ## 11. Selected architecture decisions
 
-| Decision | HLD choice | Reason and consequence |
+The choices below are HLD proposals, not accepted decision records. An ADR records the context, alternatives, decision, and consequences when the relevant choice is reviewed. Section 13 identifies the proposed ADR boundaries and remaining work.
+
+| Decision | Proposed HLD choice | Reason and consequence |
 |---|---|---|
 | Runtime | Small custom deterministic state machine, optional LangGraph adapter later | Explicit control of transitions, checkpoints, and policy; more engineering and testing required |
-| Authoritative queue | PostgreSQL durable jobs and transactional outbox | Acknowledged work survives restart; dispatch can repeat |
+| Authoritative queue | PostgreSQL durable jobs and transactional outbox; MVP delivery path remains open | Acknowledged work survives restart; dispatch can repeat. ADR-002 must choose direct database claims or a dispatcher transport |
 | Side effects | Durable operation IDs plus remote idempotency and lookup | Bounds duplicates; uncertain outcomes require reconciliation |
 | LLM | Provider adapter and a test stub | Workflows are model-independent; the LLM grants no permissions |
 | RAG | PostgreSQL/pgvector with approved, versioned hospital information and procedures | Citations retain provenance/effective dates; v1.1 adds tenant filters and retrieval measurement |
+| Authorization | Centralized hybrid RBAC + ABAC checks at API, worker, and Tool Manager boundaries | Roles limit candidate actions; resource and state attributes enforce ownership and scope; policy maintenance and negative testing are required |
 | Hospital service queue | Separate domain service/schema from v1.1 with atomic number allocation | Distinct from the platform work queue; protects numbers, ownership, and retried effects |
 | Multi-tenancy | Tenant field from MVP; fully enforced boundary in v1.1 | Avoids a major migration; requires composite foreign keys/indexes and negative tests |
 
@@ -240,13 +258,19 @@ Each test records agent and dataset versions, environment, sample size, and limi
 | Stale hospital information or incorrect route | Approved sources with versions/effective dates; clarify or hand off when no valid route exists |
 | Slot contention or concurrent number allocation | Atomic transactions and constraints in mock services; inject contention, timeouts, and crashes |
 
-## 13. Decisions for ADRs and low-level design
+## 13. Proposed ADRs and low-level design work
 
-1. **ADR-001 — Runtime/state:** Full transition table, checkpoint payload and schema migrations, input/approval tokens, and CAS conflict handling.
-2. **ADR-002 — Queue/outbox:** Direct PostgreSQL claims versus dispatcher transport, job and due-time schemas, locking query, deduplication rules, and commit/ack order.
-3. **ADR-003 — Idempotency/reconciliation:** Canonical request hash, operation-ID derivation, retention/expiration, timeout window, uncertain state, and operator resolution permissions.
-4. **ADR-004 — Identity/tenant:** Synthetic patient sessions, staff/operator identity, active tenant, membership rechecks, and distributed locks/quotas from v1.1.
-5. **ADR-005 — Hospital knowledge/safety:** Abstention threshold, citation/effective-date contract, versioned procedures and locations, warning-indicator owner, and safety-gate signoff.
-6. **ADR-006 — Hospital domain tools:** Atomic slot-capacity enforcement; service-queue number scope and allocation, ownership, statuses and operation-ID lookup, and appointment-change contracts.
+Each ADR below should capture one architectural choice, its context, credible alternatives, rationale, consequences, status, and decision owner/date. These are proposed records; the HLD does not mark them accepted. The MVP delivery path in ADR-002 is still an open choice.
 
-Timeouts, retry budgets, retention (apart from the suggested seven-day demo window), retrieval thresholds, and quota values must be configured, tested, and recorded in the low-level design and runbook. This HLD does not treat them as production targets.
+| Record | Architectural choice to review |
+|---|---|
+| ADR-001 — Runtime | Use a small deterministic state machine with durable checkpoints and CAS transitions; permit a LangGraph adapter later |
+| ADR-002 — Work delivery | Keep PostgreSQL authoritative for jobs, due times, and outbox intents; choose direct database claims or a dispatcher transport for MVP delivery |
+| ADR-003 — Side effects | Use stable operation IDs, remote idempotency and lookup, and explicit reconciliation for uncertain outcomes |
+| ADR-004 — Identity and authorization | Use server-derived tenant context and centralized RBAC + ABAC policy checks across API, workers, and tools; add membership rechecks in v1.1 |
+| ADR-005 — Hospital knowledge | Use approved, versioned sources with provenance, effective dates, citation validation, and abstention for unsupported answers |
+| ADR-006 — Safety escalation | Use a versioned warning-indicator screen and staff handoff before routine actions when warning or uncertainty is detected |
+| ADR-007 — Appointments | Keep appointment effects in an authorized domain tool with atomic slot-capacity checks, patient confirmation, and operation-ID lookup |
+| ADR-008 — Hospital service queue (v1.1) | Keep patient service numbers in a separate domain service/schema with atomic allocation, ownership checks, and operation-ID lookup |
+
+The low-level design specifies transition tables, checkpoint and token schemas, CAS conflict handling, job schemas and locking queries, commit/ack order, request canonicalization, operation-ID derivation, policy matrices, tool contracts, queue-number scope and statuses, and schema migrations. It also sets and tests timeouts, retry budgets, retention (apart from the suggested seven-day demo window), retrieval thresholds, and quota values. The runbook records operational values and recovery procedures. This HLD does not treat them as production targets.
