@@ -3,7 +3,7 @@
 **Version:** 1.2 (architecture baseline)
 **Requirements source:** [requirement.md](requirement.md), version 1.0  
 **Scope:** target architecture and release path from MVP v1.0 through Reliability v1.1 to Platform v2.0  
-**Status:** architecture baseline; accepted ADRs in section 13, low-level design still required before implementation
+**Status:** architecture baseline; accepted ADRs in section 13 and [implementation design](low-level-design.md)
 
 ## 1. Goals and principles
 
@@ -273,4 +273,4 @@ The [ADRs](adr/README.md) capture each architectural choice, its context, altern
 | ADR-007 — Appointments | Keep appointment effects in an authorized domain tool with atomic slot-capacity checks, patient confirmation, and operation-ID lookup |
 | ADR-008 — Hospital service queue (v1.1) | Keep patient service numbers in a separate domain service/schema with atomic allocation, ownership checks, and operation-ID lookup |
 
-The low-level design specifies transition tables, checkpoint and token schemas, CAS conflict handling, job schemas and locking queries, commit/ack order, request canonicalization, operation-ID derivation, policy matrices, tool contracts, queue-number scope and statuses, and schema migrations. It also sets and tests timeouts, retry budgets, retention (apart from the suggested seven-day demo window), retrieval thresholds, and quota values. The runbook records operational values and recovery procedures. This HLD does not treat them as production targets.
+The [low-level design](low-level-design.md) specifies transition tables, checkpoint and token schemas, CAS conflict handling, job claims, request canonicalization, operation IDs, policy enforcement, domain tool contracts, and v1.1 extension points. It sets demo retry and timeout values; retrieval thresholds require evaluation before enabling the corresponding workflow. Production retention, thresholds, quotas, and recovery procedures still need operational validation and a runbook. This HLD does not treat demo values as production targets.
