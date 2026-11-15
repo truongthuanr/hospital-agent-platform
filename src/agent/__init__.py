@@ -1,0 +1,2 @@
+"""Hospital Agent Platform."""
+

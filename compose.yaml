@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: hospital_agent
+      POSTGRES_USER: hospital
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hospital -d hospital_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    environment: &app_env
+      DATABASE_URL: postgresql+psycopg://hospital:${POSTGRES_PASSWORD}@db:5432/hospital_agent
+      SESSION_HASH_KEY: ${SESSION_HASH_KEY:?set SESSION_HASH_KEY}
+      DEMO_STAFF_USERNAME: ${DEMO_STAFF_USERNAME:-demo_staff}
+      DEMO_STAFF_PASSWORD: ${DEMO_STAFF_PASSWORD:?set DEMO_STAFF_PASSWORD}
+      SYNTHETIC_TENANT_ID: ${SYNTHETIC_TENANT_ID:-00000000-0000-4000-8000-000000000001}
+    command: ["sh", "-c", "alembic upgrade head && python -m hospital_agent_platform.bootstrap.seed && uvicorn hospital_agent_platform.api.main:app --host 0.0.0.0 --port 8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: .
+    environment: *app_env
+    command: ["python", "-m", "hospital_agent_platform.worker.main"]
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  postgres_data:
+
