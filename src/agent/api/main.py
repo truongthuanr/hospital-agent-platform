@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +22,7 @@ from agent.registry.service import PublishedVersionConflict, list_versions, load
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 log = logging.getLogger(__name__)
 app = FastAPI(title="Hospital Agent Platform", version="0.1.0")
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 class ApiError(Exception):
@@ -77,7 +79,9 @@ def require_idempotency_key(key: str | None = Header(default=None, alias="Idempo
 
 
 def get_actor(request: Request, db: Session = Depends(get_session),
-              settings: Settings = Depends(get_settings), authorization: str | None = Header(default=None)) -> ActorContext:
+              settings: Settings = Depends(get_settings),
+              credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme)) -> ActorContext:
+    authorization = f"Bearer {credentials.credentials}" if credentials else None
     actor = authenticate_bearer(db, settings, authorization, request.state.trace_id)
     if actor is None:
         raise ApiError(401, "unauthorized", "Authentication required")

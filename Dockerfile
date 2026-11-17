@@ -8,5 +8,5 @@ COPY migrations ./migrations
 RUN pip install --no-cache-dir .
 
 ENV PYTHONUNBUFFERED=1
-CMD ["uvicorn", "hospital_agent_platform.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "agent.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 

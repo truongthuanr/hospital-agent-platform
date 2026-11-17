@@ -23,7 +23,7 @@ services:
       DEMO_STAFF_USERNAME: ${DEMO_STAFF_USERNAME:-demo_staff}
       DEMO_STAFF_PASSWORD: ${DEMO_STAFF_PASSWORD:?set DEMO_STAFF_PASSWORD}
       SYNTHETIC_TENANT_ID: ${SYNTHETIC_TENANT_ID:-00000000-0000-4000-8000-000000000001}
-    command: ["sh", "-c", "alembic upgrade head && python -m hospital_agent_platform.bootstrap.seed && uvicorn hospital_agent_platform.api.main:app --host 0.0.0.0 --port 8000"]
+    command: ["sh", "-c", "alembic upgrade head && python -m agent.bootstrap.seed && uvicorn agent.api.main:app --host 0.0.0.0 --port 8000"]
     depends_on:
       db:
         condition: service_healthy
@@ -33,7 +33,7 @@ services:
   worker:
     build: .
     environment: *app_env
-    command: ["python", "-m", "hospital_agent_platform.worker.main"]
+    command: ["python", "-m", "agent.worker.main"]
     depends_on:
       api:
         condition: service_started
