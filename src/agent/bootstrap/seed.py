@@ -26,7 +26,7 @@ def seed() -> None:
         db.commit()
 
         if load(db, settings.synthetic_tenant_id, "hospital_frontdesk", "foundation-1") is None:
-            agent = PublishedAgent(agent_id="hospital_frontdesk", version="foundation-1", start_step="start",
+            agent = PublishedAgent(schema_version="1", agent_id="hospital_frontdesk", version="foundation-1", start_step="start",
                 steps=(StepDefinition(step_id="start", type=StepType.RULE, successors=("done",)),
                        StepDefinition(step_id="done", type=StepType.FINAL)),
                 refs=VersionReferences(workflow="foundation-1"))
@@ -35,4 +35,3 @@ def seed() -> None:
 
 if __name__ == "__main__":
     seed()
-

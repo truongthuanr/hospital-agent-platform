@@ -81,7 +81,7 @@ def test_idempotency_canonicalization_and_conflict(db_engine):
 
 def test_workflow_validation_and_immutable_publication(db_engine):
     settings = get_settings()
-    agent = PublishedAgent(agent_id="hospital_frontdesk", version="1", start_step="start",
+    agent = PublishedAgent(schema_version="1", agent_id="hospital_frontdesk", version="1", start_step="start",
                            steps=(StepDefinition(step_id="start", type=StepType.RULE, successors=("done",)),
                                   StepDefinition(step_id="done", type=StepType.FINAL)),
                            refs=VersionReferences(workflow="1"))
@@ -98,7 +98,7 @@ def test_workflow_validation_and_immutable_publication(db_engine):
             db.commit()
         db.rollback()
     with pytest.raises(ValidationError):
-        PublishedAgent(agent_id="x", version="1", start_step="start",
+        PublishedAgent(schema_version="1", agent_id="x", version="1", start_step="start",
                        steps=(StepDefinition(step_id="start", type=StepType.RULE, successors=("start",)),),
                        refs=VersionReferences(workflow="1"))
 
@@ -107,11 +107,13 @@ def test_sessions_policy_audit_and_api(client):
     http, engine = client
     settings = get_settings()
     assert http.get("/health/live").status_code == 200
-    assert http.get("/health/ready").status_code == 200
+    assert http.get("/health/live").json()["schema_version"] == "1"
+    assert http.get("/health/ready").json()["schema_version"] == "1"
     missing = http.get("/missing-route")
     assert missing.status_code == 404 and missing.json()["error_code"] == "not_found"
     patient_response = http.post("/session/patient")
     assert patient_response.status_code == 201
+    assert patient_response.json()["schema_version"] == "1"
     patient_token = patient_response.json()["token"]
     assert "X-Trace-Id" in patient_response.headers
     with Session(engine) as db:
@@ -119,21 +121,32 @@ def test_sessions_policy_audit_and_api(client):
         assert row is not None and row.token_hash != patient_token
         patient_session_id = row.id
     patient_headers = {"Authorization": f"Bearer {patient_token}"}
-    assert http.get("/agents", headers=patient_headers).status_code == 200
+    assert http.get("/agents", headers=patient_headers).json()["schema_version"] == "1"
     denied = http.post("/agents/versions", headers=patient_headers, json={})
     assert denied.status_code == 422  # Invalid schema is rejected before policy.
-    agent = {"agent_id": "x", "version": "1", "start_step": "done", "steps": [{"step_id": "done", "type": "FINAL"}],
+    agent = {"schema_version": "1", "agent_id": "x", "version": "1", "start_step": "done", "steps": [{"step_id": "done", "type": "FINAL"}],
              "refs": {"workflow": "1"}}
     denied = http.post("/agents/versions", headers=patient_headers, json=agent)
     assert denied.status_code == 403
     assert denied.json()["error_code"] == "forbidden"
-    staff = http.post("/session/staff", json={"username": "demo_staff", "password": settings.demo_staff_password})
+    assert http.post("/agents/versions", headers=patient_headers,
+                     json={**agent, "schema_version": "2"}).status_code == 422
+    assert http.post("/agents/versions", headers=patient_headers,
+                     json={**agent, "unexpected": True}).status_code == 422
+    assert http.post("/session/staff", json={"username": "demo_staff",
+                     "password": settings.demo_staff_password}).status_code == 422
+    assert http.post("/session/staff", json={"schema_version": "2", "username": "demo_staff",
+                     "password": settings.demo_staff_password}).status_code == 422
+    staff = http.post("/session/staff", json={"schema_version": "1", "username": "demo_staff", "password": settings.demo_staff_password})
     assert staff.status_code == 200
+    assert staff.json()["schema_version"] == "1"
     staff_headers = {"Authorization": f"Bearer {staff.json()['token']}"}
     created = http.post("/agents/versions", headers=staff_headers, json=agent)
     assert created.status_code == 201
+    assert created.json()["schema_version"] == "1"
     assert http.post("/agents/versions", headers=staff_headers, json=agent).status_code == 409
-    assert http.get("/agents/x/versions/1", headers=patient_headers).json()["version"] == "1"
+    fetched = http.get("/agents/x/versions/1", headers=patient_headers).json()
+    assert fetched["version"] == "1" and fetched["schema_version"] == "1"
     with Session(engine) as db:
         session = db.get(AuthSession, patient_session_id)
         session.revoked_at = utc_now()

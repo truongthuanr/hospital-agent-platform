@@ -9,6 +9,8 @@ The foundation provides the shared API, one worker process, PostgreSQL migration
 3. Check `http://localhost:8000/health/live` and `http://localhost:8000/health/ready`.
 4. Create a synthetic patient session with `POST /session/patient`, or authenticate demo staff with `POST /session/staff` and the configured username/password. Use the returned token as `Authorization: Bearer <token>` for `GET /agents`.
 
+JSON request bodies use `"schema_version": "1"` (for example, staff login and agent publication). Missing or unsupported versions and unknown fields return `422`. Successful JSON responses include `schema_version`; the standard error body remains `{error_code, message, trace_id}`.
+
 Run a migration separately with `docker compose run --rm api alembic upgrade head`. Run checks with `python -m pytest` after installing the test dependencies.
 
 The worker process currently checks database connectivity but does not claim jobs. Durable job processing starts in Stage 1.
@@ -16,4 +18,3 @@ The worker process currently checks database connectivity but does not claim job
 ## Local development
 
 Use Python 3.12 or newer. Install with `python -m pip install -e '.[test]'`, set the variables from `.env.example`, run `alembic upgrade head`, then `python -m hospital_agent_platform.bootstrap.seed`. Start the API with `uvicorn hospital_agent_platform.api.main:app --reload` and the worker with `python -m hospital_agent_platform.worker.main`.
-
