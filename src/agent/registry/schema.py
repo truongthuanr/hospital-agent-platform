@@ -1,5 +1,7 @@
 from enum import StrEnum
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -34,7 +36,7 @@ class VersionReferences(BaseModel):
 class PublishedAgent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: str = "1"
+    schema_version: Literal["1"]
     agent_id: str = Field(min_length=1, max_length=100)
     version: str = Field(min_length=1, max_length=64)
     start_step: str
@@ -43,8 +45,6 @@ class PublishedAgent(BaseModel):
 
     @model_validator(mode="after")
     def valid_graph(self) -> "PublishedAgent":
-        if self.schema_version != "1":
-            raise ValueError("Unsupported agent schema version")
         if self.refs.workflow != self.version or self.refs.policy != "foundation-v1":
             raise ValueError("Invalid version references")
         by_id = {step.step_id: step for step in self.steps}
@@ -75,4 +75,3 @@ class PublishedAgent(BaseModel):
         if len(visited) != len(by_id) or not any(by_id[x].type == StepType.FINAL for x in visited):
             raise ValueError("Unreachable steps or no FINAL step")
         return self
-

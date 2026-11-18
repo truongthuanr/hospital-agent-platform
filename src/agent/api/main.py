@@ -6,11 +6,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from agent.config import Settings, get_settings
+from agent.api.schemas import AgentListResponse, HealthResponse, PublishedVersionResponse, SessionResponse, StaffLoginRequest
 from agent.contracts.idempotency import validate_key
 from agent.contracts.types import ActorContext, ActorType
 from agent.db import engine, get_session
@@ -93,59 +93,47 @@ def require_policy(db: Session, actor: ActorContext, action: str, resource: Poli
         raise ApiError(403, "forbidden", "Access denied")
 
 
-@app.get("/health/live")
+@app.get("/health/live", response_model=HealthResponse)
 def live():
-    return {"status": "live"}
+    return HealthResponse(status="live")
 
 
-@app.get("/health/ready")
+@app.get("/health/ready", response_model=HealthResponse)
 def ready(request: Request):
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except Exception:
         raise ApiError(503, "unavailable", "Database unavailable") from None
-    return {"status": "ready", "trace_id": str(request.state.trace_id)}
-
-
-class SessionResponse(BaseModel):
-    token: str
-    token_type: str = "bearer"
-    expires_at: str
-
-
-class StaffLogin(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    username: str = Field(min_length=1, max_length=120)
-    password: str = Field(min_length=1)
+    return HealthResponse(status="ready", trace_id=request.state.trace_id)
 
 
 @app.post("/session/patient", response_model=SessionResponse, status_code=201)
 def patient_session(db: Session = Depends(get_session), settings: Settings = Depends(get_settings)):
     token, row = issue_session(db, settings, uuid4(), ActorType.PATIENT, ["patient"])
     db.commit()
-    return SessionResponse(token=token, expires_at=row.expires_at.isoformat())
+    return SessionResponse(token=token, expires_at=row.expires_at)
 
 
 @app.post("/session/staff", response_model=SessionResponse)
-def staff_session(body: StaffLogin, db: Session = Depends(get_session), settings: Settings = Depends(get_settings)):
+def staff_session(body: StaffLoginRequest, db: Session = Depends(get_session), settings: Settings = Depends(get_settings)):
     account = authenticate_staff(db, settings, body.username, body.password)
     if account is None:
         raise ApiError(401, "unauthorized", "Invalid credentials")
     token, row = issue_session(db, settings, account.id, ActorType.STAFF, [account.role])
     db.commit()
-    return SessionResponse(token=token, expires_at=row.expires_at.isoformat())
+    return SessionResponse(token=token, expires_at=row.expires_at)
 
 
-@app.get("/agents")
+@app.get("/agents", response_model=AgentListResponse)
 def agents(actor: ActorContext = Depends(get_actor), db: Session = Depends(get_session)):
     require_policy(db, actor, "agents:list", PolicyResource("agent_registry", None, actor.tenant_id))
     rows = list_versions(db, actor.tenant_id)
-    return {"agents": [{"agent_id": row.agent_id, "version": row.version,
-                        "published_at": row.published_at.isoformat()} for row in rows]}
+    return AgentListResponse(agents=[{"agent_id": row.agent_id, "version": row.version,
+                                      "published_at": row.published_at} for row in rows])
 
 
-@app.get("/agents/{agent_id}/versions/{version}")
+@app.get("/agents/{agent_id}/versions/{version}", response_model=PublishedAgent)
 def agent_version(agent_id: str, version: str, actor: ActorContext = Depends(get_actor), db: Session = Depends(get_session)):
     require_policy(db, actor, "agents:list", PolicyResource("agent_version", f"{agent_id}:{version}", actor.tenant_id))
     result = load(db, actor.tenant_id, agent_id, version)
@@ -154,12 +142,11 @@ def agent_version(agent_id: str, version: str, actor: ActorContext = Depends(get
     return result
 
 
-@app.post("/agents/versions", status_code=201)
+@app.post("/agents/versions", response_model=PublishedVersionResponse, status_code=201)
 def publish_agent(agent: PublishedAgent, actor: ActorContext = Depends(get_actor), db: Session = Depends(get_session)):
     require_policy(db, actor, "agents:publish", PolicyResource("agent_version", f"{agent.agent_id}:{agent.version}", actor.tenant_id))
     try:
         row = publish(db, actor.tenant_id, agent)
     except PublishedVersionConflict:
         raise ApiError(409, "version_conflict", "Agent version already published") from None
-    return {"agent_id": row.agent_id, "version": row.version, "snapshot_hash": row.snapshot_hash}
-
+    return PublishedVersionResponse(agent_id=row.agent_id, version=row.version, snapshot_hash=row.snapshot_hash)
