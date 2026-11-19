@@ -31,6 +31,8 @@ Checkpoints contain `workflow_step`, input/output references, pending input/appr
 
 ## State machine
 
+These states describe an execution, not workflow step types. See [Workflow Step Types](workflow-steps.md) for `RULE`, `WAIT_INPUT`, `WAIT_APPROVAL`, and the other published step types.
+
 | From | To | Condition |
 |---|---|---|
 | `PENDING` | `RUNNING` | Valid start job |

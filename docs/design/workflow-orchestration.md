@@ -12,6 +12,8 @@ The registry submodule owns `agent_versions` with `(tenant_id, agent_id, version
 
 Each published step declares `step_id`, step type (`RULE`, `LLM`, `RAG`, `TOOL`, `WAIT_INPUT`, `WAIT_APPROVAL`, or `FINAL`), input/output schema versions, allowed successors, timeout, retry policy, required tool and policy action. Publication rejects missing successors, unbounded loops, incompatible contracts, or a tool step without an allowlist entry. A handler returns a typed `StepDecision(next_state, next_step?, checkpoint_delta, output_ref?, retry_due_at?, operation_id?)`; runtime validates it against the pinned graph.
 
+See [Workflow Step Types](workflow-steps.md) for the meaning, branch contract, and delivery stage of each type. The execution-state transition table remains in [Agent Runtime](agent-runtime.md#state-machine).
+
 ## Durable job contract
 
 `durable_jobs` has UUID PK, tenant, execution ID, expected version, step ID, attempt number, `due_at`, `status`, `claimed_at`, and `completed_at`; unique `(execution_id, expected_version, step_id, attempt_no)`. A partial `(due_at, id)` index on `READY` jobs supports due claims. It is the MVP transactional outbox work intent. A separate publication outbox appears only if a later ADR selects a transport.

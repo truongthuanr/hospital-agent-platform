@@ -26,6 +26,7 @@ flowchart LR
 | [System Contract](design/system-contract.md) | HTTP, actor/tenant context, common types, request idempotency, policy interface | `202` only after durable admission; default-deny access |
 | [Agent Runtime](design/agent-runtime.md) | Execution state, checkpoints, events, attempts, waiting requests, CAS | One committed transition per expected version |
 | [Workflow Orchestration](design/workflow-orchestration.md) | Workflow graph, scheduler, jobs, retries, worker claims/leases | At-least-once processing from PostgreSQL work intents |
+| [Workflow Step Types](design/workflow-steps.md) | Meaning and declared contracts of published steps | A step's continuation is limited to its pinned, declared successors |
 | [LLM Gateway](design/llm-gateway.md) | Provider adapters, prompt/model versions, structured output, stub | Model output is data, never authority |
 | [Tool/MCP](design/tool-mcp.md) | Tool contracts, policy gate, invocation ledger, reconciliation | Stable operation ID and remote lookup for effects |
 | [Memory](design/memory.md) | Tenant-scoped conversation context | Chat changes cannot alter workflow progress |
